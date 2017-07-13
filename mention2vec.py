@@ -12,7 +12,8 @@ class Seq(object):
     def __init__(self, w_seq, l_seq=None):
         self.w_seq = w_seq
         self.l_seq = l_seq
-        self.l_pred = []
+        self.bio_pred = []
+        self.ent_pred = []
 
 class SeqData(object):
     def __init__(self, data_path):
@@ -67,8 +68,8 @@ class Mention2Vec(object):
             random.shuffle(inds)
             for i in inds:
                 loss = self.get_loss(data.seqs[i])
-                print loss.value()
-                print data.seqs[i].l_pred
+                #print loss.value()
+                #print data.seqs[i].bio_pred
                 loss.backward()
                 trainer.update()
 
@@ -92,25 +93,80 @@ class Mention2Vec(object):
         wreps2 = []
         outs_f, outs_b = [], []
         f, b = self.wlstm1.initial_state(), self.wlstm2.initial_state()
-        for wrep_f, wrep_b in zip(wreps1, reversed(wreps1)):
-            f, b = f.add_input(wrep_f), b.add_input(wrep_b)
+        for wrep1_f, wrep1_b in zip(wreps1, reversed(wreps1)):
+            f = f.add_input(wrep1_f)
+            b = b.add_input(wrep1_b)
             outs_f.append(f.output())
             outs_b.append(b.output())
         for i, out_b in enumerate(reversed(outs_b)):
             wreps2.append(dy.concatenate([outs_f[i], out_b]))
 
         losses = []
+        bio_pred = []
         for i, h in enumerate(wreps2):
             g = self.ff_bio(h)
             if self.is_training:
                 gold = self.bio_enc[seq.l_seq[i][0]]
                 losses.append(dy.pickneglogsoftmax(g, gold))
             else:
-                seq.l_pred.append(self.bio_dec[np.argmax(g.npvalue())])
+                bio_pred.append(self.bio_dec[np.argmax(g.npvalue())])
 
             #tmp
-            seq.l_pred.append(self.bio_dec[np.argmax(g.npvalue())])
-        return dy.esum(losses)
+            bio_pred.append(self.bio_dec[np.argmax(g.npvalue())])
+        #tmp
+        seq.bio_pred = bio_pred
+        boundary_loss = dy.esum(losses)
+
+        losses = []
+        boundaries = self.get_boundaries(seq)
+        ent_pred = []
+        for (s, t, entity) in boundaries:
+            f, b = self.elstm1.initial_state(), self.elstm2.initial_state()
+            for wrep2_f, wrep2_b in zip(wreps2[s:t+1], reversed(wreps2[s:t+1])):
+                f = f.add_input(wrep2_f)
+                b = b.add_input(wrep2_b)
+            h = dy.concatenate([f.output(), b.output()])
+            g = self.ff_ent(h)
+            if self.is_training:
+                print entity
+                gold = self.ent_enc[entity]
+                losses.append(dy.pickneglogsoftmax(g, gold))
+            else:
+                ent_pred.append(self.ent_dec[np.argmax(g.npvalue())])
+            #tmp
+            ent_pred.append(self.ent_dec[np.argmax(g.npvalue())])
+        #tmp
+        seq.ent_pred = ent_pred
+        classification_loss = dy.esum(losses) if losses else dy.scalarInput(0.)
+        print seq.w_seq
+        print seq.l_seq
+        print seq.bio_pred
+        print seq.ent_pred
+        print
+
+        return boundary_loss + classification_loss
+
+    def get_boundaries(self, seq):
+        bio = [l[0] for l in seq.l_seq] if self.is_training else seq.bio_pred
+        boundaries = []
+        i = 0
+        while i < len(bio):
+            if bio[i] == 'B':
+                s = i
+                while i < len(bio) and bio[i] != 'O': i += 1
+                t = i - 1
+                entity = seq.l_seq[s][2:] if self.is_training else None
+                boundaries.append((s, t, entity))
+            else:
+                i += 1
+        return boundaries
+
+    def ff_ent(self, h):
+        W_ent1 = dy.parameter(self.l2ent1)
+        W_ent1b = dy.parameter(self.l2ent1b)
+        W_ent2 = dy.parameter(self.l2ent2)
+        W_ent2b = dy.parameter(self.l2ent2b)
+        return W_ent2 * dy.tanh(W_ent1 * h + W_ent1b) + W_ent2b
 
     def ff_bio(self, h):
         W_bio1 = dy.parameter(self.l2bio1)
@@ -134,6 +190,11 @@ class Mention2Vec(object):
     def __init_wparams(self, data, wemb_path):
         self.w_enc = deepcopy(data.w_enc)
         self.l_enc = deepcopy(data.l_enc)
+        self.ent_enc = {}
+        for l in self.l_enc:
+            if len(l) > 1 and not l[2:] in self.ent_enc:
+                self.ent_enc[l[2:]] = len(self.ent_enc)
+        self.ent_dec = {self.ent_enc[x]: x for x in self.ent_enc}
         self.w_count = deepcopy(data.w_count)
         wemb = {}
         if wemb_path:
@@ -180,6 +241,16 @@ class Mention2Vec(object):
         self.l2bio1b = self.m.add_parameters((3))
         self.l2bio2 = self.m.add_parameters((3, 3))
         self.l2bio2b = self.m.add_parameters((3))
+
+        self.elstm1 = dy.LSTMBuilder(1, 2 * self.ldim, 2 * self.ldim, self.m)
+        self.elstm2 = dy.LSTMBuilder(1, 2 * self.ldim, 2 * self.ldim, self.m)
+
+        self.l2ent1 = self.m.add_parameters((len(self.ent_enc), 4 * self.ldim))
+        self.l2ent1b = self.m.add_parameters((len(self.ent_enc)))
+        self.l2ent2 = self.m.add_parameters((len(self.ent_enc),
+                                             len(self.ent_enc)))
+        self.l2ent2b = self.m.add_parameters((len(self.ent_enc)))
+
 
 ######################## script for command line usage  ########################
 def main(args):
