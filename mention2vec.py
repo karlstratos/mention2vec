@@ -2,53 +2,52 @@
 import argparse
 import dynet as dy
 import numpy as np
+import os
+import pickle
 import random
 from collections import Counter
 from copy import deepcopy
 
-################################# data #########################################
-
-class Seq(object):
-    def __init__(self, w_seq, l_seq=None):
-        self.w_seq = w_seq  # word sequence
-        self.l_seq = l_seq  # label sequence
-        self.bio_pred = []
-        self.ent_pred = []
-    #TODO: Maybe evaluate here or in SeqData?
-
-class SeqData(object):
-    def __init__(self, data_path):
-        self.seqs = []
-        self.w_enc = {}  # "dog"   -> 35887
-        self.c_enc = {}  # "d"     -> 20
-        self.l_enc = {}  # "B-ORG" -> 7
-        self.w_count = Counter()
-        self.c_count = Counter()
-        with open(data_path) as infile:
-            w_seq = []
-            l_seq = []
-            for line in infile:
-                toks = line.split()
-                if toks:
-                    w = toks[0]
-                    l = toks[1]
-                    self.w_count[w] += 1
-                    if not w in self.w_enc: self.w_enc[w] = len(self.w_enc)
-                    for c in w:
-                        self.c_count[c] += 1
-                        if not c in self.c_enc: self.c_enc[c] = len(self.c_enc)
-                    if not l in self.l_enc: self.l_enc[l] = len(self.l_enc)
-                    w_seq.append(w)
-                    l_seq.append(l)
-                else:
-                    if w_seq:
-                        self.seqs.append(Seq(w_seq, l_seq))
-                        w_seq = []
-                        l_seq = []
-            if w_seq:
-                self.seqs.append(Seq(w_seq, l_seq))
-
 ########################### useful generic operations ##########################
+
+def get_boundaries(bio):
+    """
+    Extracts an ordered list of boundaries. BIO label sequences can be either
+    -     Raw BIO: B     I     I     O => {(0,2,None)}
+    - Labeled BIO: B-PER I-PER B-LOC O => {(0,1,"PER"), (2,2,"LOC")}
+    """
+    boundaries= []
+    i = 0
+
+    while i < len(bio):
+        if bio[i][0] == 'O': i += 1
+        else:
+            s = i
+            i += 1
+            while i < len(bio) and bio[i][0] == 'I': i += 1
+            t = i
+            entity = bio[s][2:] if len(bio[s]) > 2 else None
+            boundaries.append((s, t, entity))
+
+    return boundaries
+
+def label_bio(bio, ents):
+    labeled_bio = []
+    i = 0
+    counter = 0
+    while i < len(bio):
+        if bio[i][0] == 'O':
+            labeled_bio.append('O')
+            i += 1
+        else:
+            labeled_bio.append(bio[i][0] + '-' + ents[counter])
+            i += 1
+            while i < len(bio) and bio[i][0] == 'I':
+                labeled_bio.append(bio[i][0] + '-' + ents[counter])
+                i += 1
+            counter += 1
+
+    return labeled_bio
 
 def drop(x, x_count):
     """Drops x with higher probabiliy if x is less frequent."""
@@ -80,6 +79,108 @@ def bilstm(inputs, lstm1, lstm2):
         outs.append(dy.concatenate([outs_f[i], out_b]))
     return outs
 
+################################# data #########################################
+
+class Seq(object):
+    def __init__(self, w_seq, l_seq=None):
+        self.w_seq = w_seq  # word sequence
+        self.l_seq = l_seq  # label sequence
+        self.bio_pred = []
+        self.ent_pred = []
+
+    def evaluate(self, tp, fp, fn, all_ent="<all>"):
+        gold_boundaries = get_boundaries(self.l_seq)
+        pred_boundaries_untyped = get_boundaries(self.bio_pred)
+        pred_boundaries = []
+        for i in xrange(len(pred_boundaries_untyped)):
+            s, t, _ = pred_boundaries_untyped[i]
+            entity = self.ent_pred[i]
+            pred_boundaries.append((s, t, entity))
+        gold_boundaries = set(gold_boundaries)
+        pred_boundaries = set(pred_boundaries)
+        for (s, t, entity) in gold_boundaries:
+            if (s, t, entity) in pred_boundaries:
+                tp[entity] += 1
+                tp[all_ent] += 1
+            else:
+                fn[entity] += 1
+                fn[all_ent] += 1
+        for (s, t, entity) in pred_boundaries:
+            if not (s, t, entity) in gold_boundaries:
+                fp[entity] += 1
+                fp[all_ent] += 1
+
+class SeqData(object):
+    def __init__(self, data_path):
+        self.seqs = []
+        self.w_enc = {}  # "dog"   -> 35887
+        self.c_enc = {}  # "d"     -> 20
+        self.l_enc = {}  # "B-ORG" -> 7
+        self.e_enc = {}  # "PER" -> 2
+        self.__ALL = "<all>"  # Denotes all entity types.
+        self.w_count = Counter()
+        self.c_count = Counter()
+
+        with open(data_path) as infile:
+            w_seq = []
+            l_seq = []
+            for line in infile:
+                toks = line.split()
+                if toks:
+                    w = toks[0]
+                    l = toks[1]
+                    self.w_count[w] += 1
+                    if not w in self.w_enc: self.w_enc[w] = len(self.w_enc)
+                    for c in w:
+                        self.c_count[c] += 1
+                        if not c in self.c_enc: self.c_enc[c] = len(self.c_enc)
+                    if not l in self.l_enc: self.l_enc[l] = len(self.l_enc)
+                    w_seq.append(w)
+                    l_seq.append(l)
+                else:
+                    if w_seq:
+                        self.seqs.append(Seq(w_seq, l_seq))
+                        w_seq = []
+                        l_seq = []
+            if w_seq:
+                self.seqs.append(Seq(w_seq, l_seq))
+
+        for l in self.l_enc:
+            if len(l) > 1 and not l[2:] in self.e_enc:
+                self.e_enc[l[2:]] = len(self.e_enc)
+
+    def evaluate(self):
+        keys = self.e_enc.keys() + [self.__ALL]
+        tp = {e: 0 for e in keys}
+        fp = {e: 0 for e in keys}
+        fn = {e: 0 for e in keys}
+        for seq in self.seqs:
+            seq.evaluate(tp, fp, fn, self.__ALL)
+
+        self.p = {}
+        self.r = {}
+        for e in keys:
+            pZ = tp[e] + fp[e]
+            rZ = tp[e] + fn[e]
+            self.p[e] = 100. * tp[e] / pZ if pZ > 0. else 0.
+            self.r[e] = 100. * tp[e] / rZ if rZ > 0. else 0.
+        return self.f1(self.__ALL)
+
+    def f1(self, cat):
+        f1Z = self.p[cat] + self.r[cat]
+        f1 = 2. * self.p[cat] * self.r[cat] / f1Z if f1Z > 0. else 0.0
+        return f1
+
+    def write(self, path):
+        with open(path, 'w') as outf:
+            for seq in self.seqs:
+
+                pred = label_bio(seq.bio_pred, seq.ent_pred)
+                for i in xrange(len(seq.w_seq)):
+                    outf.write(seq.w_seq[i] + " " + seq.l_seq[i] + " " + pred[i]
+                               + "\n")
+                outf.write("\n")
+
 ################################## model #######################################
 
 class Mention2Vec(object):
@@ -102,11 +203,14 @@ class Mention2Vec(object):
     def train(self, data, dev=None):
         self.m = dy.ParameterCollection()
         self.__init_params(data)
-        self.__set_lstm_dropout()
+        self.__enable_lstm_dropout()
         self.__is_training = True
+        if os.path.isfile(self.model_path): os.remove(self.model_path)
+        if not os.path.exists(self.model_path): os.makedirs(self.model_path)
 
         trainer = dy.AdamTrainer(self.m)
         perf_best = 0.
+        exists = False
         for epoch in xrange(self.epochs):
             inds = [i for i in xrange(len(data.seqs))]
             random.shuffle(inds)
@@ -114,18 +218,52 @@ class Mention2Vec(object):
                 loss = self.get_loss(data.seqs[i])
                 loss.backward()
                 trainer.update()
+
             if dev:
                 self.__is_training = False
+                self.__disable_lstm_dropout()
                 perf = self.get_perf(dev)
+                print perf,
                 if perf > perf_best:
                     perf_best = perf
+                    print 'saving',
                     self.save()
+                    exists = True
                 self.__is_training = True
+                self.__enable_lstm_dropout()
+                print
+
+            else:
+                self.save()
+
+        if exists:
+            m = Mention2Vec()
+            m.load_and_populate(self.model_path)
+            perf = m.get_perf(dev)
+            print "Best dev perf: ", perf
+
+    def save(self):
+        self.m.save(os.path.join(self.model_path, "model"))
+        with open(os.path.join(self.model_path, "info.pickle"), 'w') as outf:
+            pickle.dump((self.w_enc, self.wdim, self.c_enc, self.cdim,
+                         self.ldim, self.e_dec), outf)
+
+    def load_and_populate(self, model_path):
+        self.m = dy.ParameterCollection()
+        self.model_path = model_path
+        with open(os.path.join(self.model_path, "info.pickle")) as inf:
+            self.w_enc, self.wdim, self.c_enc, self.cdim, self.ldim, \
+                self.e_dec = pickle.load(inf)
+        self.wlook = self.m.add_lookup_parameters((len(self.w_enc), self.wdim))
+        self.clook = self.m.add_lookup_parameters((len(self.c_enc), self.cdim))
+        self.__init_others()
+        self.m.populate(os.path.join(self.model_path, "model"))
+        self.__disable_lstm_dropout()
 
     def get_perf(self, dev):
         for i in xrange(len(dev.seqs)):
             self.get_loss(dev.seqs[i])
-        return 0.
+        return dev.evaluate()
 
     def get_crep(self, w):
         """Character-based representation of word w"""
@@ -151,7 +289,6 @@ class Mention2Vec(object):
 
         losses = []
         if not self.__is_training: seq.bio_pred = []
-        seq.bio_pred = []  # tmp
         for i, h in enumerate(inputs):
             g = W_bio2 * dy.tanh(W_bio1 * h + W_bio1b) + W_bio2b
             if self.__is_training:
@@ -159,30 +296,9 @@ class Mention2Vec(object):
                 losses.append(dy.pickneglogsoftmax(g, gold))
             else:
                 seq.bio_pred.append(self.__BIO_DEC[np.argmax(g.npvalue())])
-            seq.bio_pred.append(self.__BIO_DEC[np.argmax(g.npvalue())])  #tmp
-        boundary_loss = dy.esum(losses)
+        boundary_loss = dy.esum(losses) if losses else dy.scalarInput(0.)
 
         return boundary_loss
-
-    def get_boundaries(self, seq):
-        """
-        Extracts boundaries from sequence. Example for "John Smith was in Paris":
-         - If training: {(0,1,"PER"), (4,4,"LOC")}
-         - If predicting: {(0,1,None), (4,4,None)}
-        """
-        bio = [l[0] for l in seq.l_seq] if self.__is_training else seq.bio_pred
-        boundaries = []
-        i = 0
-        while i < len(bio):
-            if bio[i] == 'B':
-                s = i
-                while i < len(bio) and bio[i] != 'O': i += 1
-                t = i - 1
-                entity = seq.l_seq[s][2:] if self.__is_training else None
-                boundaries.append((s, t, entity))
-            else:
-                i += 1
-        return boundaries
 
     def get_loss_classification(self, inputs, seq):
         """
@@ -193,19 +309,18 @@ class Mention2Vec(object):
         W_ent2 = dy.parameter(self.l2ent2)
         W_ent2b = dy.parameter(self.l2ent2b)
 
-        boundaries = self.get_boundaries(seq)
+        boundaries = get_boundaries(seq.l_seq) if self.__is_training else \
+                     get_boundaries(seq.bio_pred)
         losses = []
         if not self.__is_training: seq.ent_pred = []
-        seq.ent_pred = []  # tmp
         for (s, t, entity) in boundaries:
             h = bilstm_single(inputs[s:t+1], self.elstm1, self.elstm2)
             g = W_ent2 * dy.tanh(W_ent1 * h + W_ent1b) + W_ent2b
             if self.__is_training:
-                gold = self.ent_enc[entity]
+                gold = self.e_enc[entity]
                 losses.append(dy.pickneglogsoftmax(g, gold))
             else:
-                seq.ent_pred.append(self.ent_dec[np.argmax(g.npvalue())])
-            seq.ent_pred.append(self.ent_dec[np.argmax(g.npvalue())])  #tmp
+                seq.ent_pred.append(self.e_dec[np.argmax(g.npvalue())])
         classification_loss = dy.esum(losses) if losses else dy.scalarInput(0.)
 
         return classification_loss
@@ -220,11 +335,6 @@ class Mention2Vec(object):
 
         boundary_loss = self.get_loss_boundary(wreps2, seq)
         classification_loss = self.get_loss_classification(wreps2, seq)
-        print seq.w_seq
-        print seq.l_seq
-        print seq.bio_pred
-        print seq.ent_pred
-        print
 
         return boundary_loss + classification_loss
 
@@ -233,7 +343,7 @@ class Mention2Vec(object):
         self.__init_cparams(data)
         self.__init_others()
 
-    def __set_lstm_dropout(self):
+    def __enable_lstm_dropout(self):
         self.clstm1.set_dropout(self.dropout_rate)
         self.clstm2.set_dropout(self.dropout_rate)
         self.wlstm1.set_dropout(self.dropout_rate)
@@ -241,14 +351,19 @@ class Mention2Vec(object):
         self.elstm1.set_dropout(self.dropout_rate)
         self.elstm2.set_dropout(self.dropout_rate)
 
+    def __disable_lstm_dropout(self):
+        self.clstm1.disable_dropout()
+        self.clstm2.disable_dropout()
+        self.wlstm1.disable_dropout()
+        self.wlstm2.disable_dropout()
+        self.elstm1.disable_dropout()
+        self.elstm2.disable_dropout()
+
     def __init_wparams(self, data):
         self.w_enc = deepcopy(data.w_enc)
         self.l_enc = deepcopy(data.l_enc)
-        self.ent_enc = {}  # "PER" -> 2
-        for l in self.l_enc:
-            if len(l) > 1 and not l[2:] in self.ent_enc:
-                self.ent_enc[l[2:]] = len(self.ent_enc)
-        self.ent_dec = {self.ent_enc[x]: x for x in self.ent_enc}
+        self.e_enc = deepcopy(data.e_enc)
+        self.e_dec = {self.e_enc[x]: x for x in self.e_enc}
         self.w_count = deepcopy(data.w_count)
         wemb = {}
         if self.wemb_path:
@@ -300,11 +415,10 @@ class Mention2Vec(object):
         # Entity classification params
         self.elstm1 = dy.LSTMBuilder(1, 2 * self.ldim, 2 * self.ldim, self.m)
         self.elstm2 = dy.LSTMBuilder(1, 2 * self.ldim, 2 * self.ldim, self.m)
-        self.l2ent1 = self.m.add_parameters((len(self.ent_enc), 4 * self.ldim))
-        self.l2ent1b = self.m.add_parameters((len(self.ent_enc)))
-        self.l2ent2 = self.m.add_parameters((len(self.ent_enc),
-                                             len(self.ent_enc)))
-        self.l2ent2b = self.m.add_parameters((len(self.ent_enc)))
+        self.l2ent1 = self.m.add_parameters((len(self.e_dec), 4 * self.ldim))
+        self.l2ent1b = self.m.add_parameters((len(self.e_dec)))
+        self.l2ent2 = self.m.add_parameters((len(self.e_dec), len(self.e_dec)))
+        self.l2ent2b = self.m.add_parameters((len(self.e_dec)))
 
 ############################  command line usage  ##############################
 def main(args):
@@ -317,11 +431,18 @@ def main(args):
         dev = SeqData(args.dev) if args.dev else None
         model.train(data, dev)
 
+    else:
+        model.load_and_populate(args.model)
+        perf = model.get_perf(data)
+        if args.pred: data.write(args.pred)
+        print perf
+
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser()
     argparser.add_argument("model", type=str, help="model path")
     argparser.add_argument("data", type=str, help="data for train/test)")
     argparser.add_argument("--dev", type=str, help="data for dev")
+    argparser.add_argument("--pred", type=str, help="write predictions here")
     argparser.add_argument("--train", action="store_true", help="train model?")
     argparser.add_argument("--emb", type=str, help="word embeddings")
     argparser.add_argument("--wdim", type=int, default=100)
