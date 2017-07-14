@@ -24,7 +24,7 @@ def get_boundaries(bio):
         else:
             s = i
             i += 1
-            while i < len(bio) and bio[i][0] == 'I': i += 1
+            while i < len(bio) and bio[i][0] == 'I': i += 1 # TODO: check type
             t = i
             entity = bio[s][2:] if len(bio[s]) > 2 else None
             boundaries.append((s, t, entity))
