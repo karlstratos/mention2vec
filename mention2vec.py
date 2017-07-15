@@ -13,8 +13,8 @@ from copy import deepcopy
 def get_boundaries(bio):
     """
     Extracts an ordered list of boundaries. BIO label sequences can be either
-    -     Raw BIO: B     I     I     O => {(0,2,None)}
-    - Labeled BIO: B-PER I-PER B-LOC O => {(0,1,"PER"), (2,2,"LOC")}
+    -     Raw BIO: B     I     I     O => {(0, 2, None)}
+    - Labeled BIO: B-PER I-PER B-LOC O => {(0, 1, "PER"), (2, 2, "LOC")}
     """
     boundaries= []
     i = 0
@@ -23,11 +23,12 @@ def get_boundaries(bio):
         if bio[i][0] == 'O': i += 1
         else:
             s = i
-            i += 1
-            while i < len(bio) and bio[i][0] == 'I': i += 1 # TODO: check type
-            t = i
             entity = bio[s][2:] if len(bio[s]) > 2 else None
-            boundaries.append((s, t, entity))
+            i += 1
+            while i < len(bio) and bio[i][0] == 'I':
+                if len(bio[i]) > 2 and bio[i][2:] != entity: break
+                i += 1
+            boundaries.append((s, i - 1, entity))
 
     return boundaries
 
