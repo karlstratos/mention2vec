@@ -271,12 +271,14 @@ class Mention2Vec(object):
         inputs = []
         for c in w:
             if self.__is_training and drop(c, self.c_count): c = self.__UNK
+            if not c in self.c_enc: c = self.__UNK
             inputs.append(dy.lookup(self.clook, self.c_enc[c]))
         return bilstm_single(inputs, self.clstm1, self.clstm2)
 
     def get_wemb(self, w):
         """Word embedding of word w"""
         if self.__is_training and drop(w, self.w_count): w = self.__UNK
+        if not w in self.w_enc: w = self.__UNK
         return dy.lookup(self.wlook, self.w_enc[w])
 
     def get_loss_boundary(self, inputs, seq):
@@ -446,11 +448,15 @@ if __name__ == "__main__":
     argparser.add_argument("--pred", type=str, help="write predictions here")
     argparser.add_argument("--train", action="store_true", help="train model?")
     argparser.add_argument("--emb", type=str, help="word embeddings")
-    argparser.add_argument("--wdim", type=int, default=100)
-    argparser.add_argument("--cdim", type=int, default=25)
-    argparser.add_argument("--ldim", type=int, default=100)
-    argparser.add_argument("--epochs", type=int, default=30)
-    argparser.add_argument("--drop", type=float, default=0.1)
+    argparser.add_argument("--wdim", type=int, default=100, help="%(default)d")
+    argparser.add_argument("--cdim", type=int, default=25, help="%(default)d")
+    argparser.add_argument("--ldim", type=int, default=100, help="%(default)d")
+    argparser.add_argument("--epochs", type=int, default=30,
+                           help="%(default)d")
+    argparser.add_argument("--drop", type=float, default=0.1,
+                           help="%(default)f")
+    argparser.add_argument("--dynet-mem")
+    argparser.add_argument("--dynet-seed")
 
     parsed_args = argparser.parse_args()
     main(parsed_args)
