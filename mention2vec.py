@@ -192,7 +192,7 @@ class Mention2Vec(object):
         self.__BIO_DEC = {self.__BIO_ENC[x]: x for x in self.__BIO_ENC}
 
     def config(self, wdim, cdim, ldim, model_path, wemb_path, epochs,
-               dropout_rate):
+               dropout_rate, learning_rate):
         self.wdim = wdim
         self.cdim = cdim
         self.ldim = ldim
@@ -200,6 +200,7 @@ class Mention2Vec(object):
         self.wemb_path = wemb_path
         self.epochs = epochs
         self.dropout_rate = dropout_rate
+        self.learning_rate = learning_rate
 
     def train(self, data, dev=None):
         self.m = dy.ParameterCollection()
@@ -209,7 +210,7 @@ class Mention2Vec(object):
         if os.path.isfile(self.model_path): os.remove(self.model_path)
         if not os.path.exists(self.model_path): os.makedirs(self.model_path)
 
-        trainer = dy.AdamTrainer(self.m)
+        trainer = dy.AdamTrainer(self.m, self.learning_rate)
         perf_best = 0.
         exists = False
         for epoch in xrange(self.epochs):
@@ -224,10 +225,10 @@ class Mention2Vec(object):
                 self.__is_training = False
                 self.__disable_lstm_dropout()
                 perf = self.get_perf(dev)
-                print perf,
+                print "Epoch {0:d} F1: {1:.2f}".format(epoch + 1, perf),
                 if perf > perf_best:
                     perf_best = perf
-                    print 'saving',
+                    print 'new best - saving model',
                     self.save()
                     exists = True
                 self.__is_training = True
@@ -241,7 +242,7 @@ class Mention2Vec(object):
             m = Mention2Vec()
             m.load_and_populate(self.model_path)
             perf = m.get_perf(dev)
-            print "Best dev perf: ", perf
+            print "Best dev F1: {0:.2f}".format(perf)
 
     def save(self):
         self.m.save(os.path.join(self.model_path, "model"))
@@ -430,7 +431,7 @@ def main(args):
 
     if args.train:
         model.config(args.wdim, args.cdim, args.ldim,
-                     args.model, args.emb, args.epochs, args.drop)
+                     args.model, args.emb, args.epochs, args.drop, args.lrate)
         dev = SeqData(args.dev) if args.dev else None
         model.train(data, dev)
 
@@ -438,7 +439,7 @@ def main(args):
         model.load_and_populate(args.model)
         perf = model.get_perf(data)
         if args.pred: data.write(args.pred)
-        print perf
+        print "F1: {0:.2f}".format(perf)
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser()
@@ -454,6 +455,8 @@ if __name__ == "__main__":
     argparser.add_argument("--epochs", type=int, default=30,
                            help="%(default)d")
     argparser.add_argument("--drop", type=float, default=0.1,
+                           help="%(default)f")
+    argparser.add_argument("--lrate", type=float, default=0.001,
                            help="%(default)f")
     argparser.add_argument("--dynet-mem")
     argparser.add_argument("--dynet-seed")
