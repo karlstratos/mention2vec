@@ -5,6 +5,7 @@ import numpy as np
 import os
 import pickle
 import random
+import sys
 from collections import Counter
 from copy import deepcopy
 
@@ -49,6 +50,41 @@ def label_bio(bio, ents):
             counter += 1
 
     return labeled_bio
+
+def score_crf(start_b, T, end_b, score_vecs, inds):
+    total = start_b[inds[0]] + score_vecs[0][inds[0]]
+    for i in xrange(1, len(score_vecs)):
+        total += T[inds[i-1]][inds[i]] + score_vecs[i][inds[i]]
+    total += end_b[inds[-1]]
+    return total
+
+def viterbi(start_b, T, end_b, score_vecs, valid):
+    num_labels = len(valid)
+    pi = [[None] * num_labels] * len(score_vecs)
+    bp = [[None] * num_labels] * len(score_vecs)
+
+    for y in xrange(num_labels): pi[0][y] = score_vecs[0][y] + start_b[y]
+
+    for i in xrange(1, len(score_vecs)):
+        for y in xrange(num_labels):
+            score_best = float("-inf")
+            y_prev_best = None
+            valid_previous_labels = valid[y]
+            for y_prev in valid_previous_labels:
+                score = pi[i-1][y_prev] +  T[y_prev][y] + score_vecs[i][y]
+                if score > score_best:
+                    y_prev_best = y_prev
+                    score_best = score
+            pi[i][y] = score_best
+            bp[i][y] = y_prev_best
+
+    best_y = np.argmax([pi[-1][y] + end_b[y] for y in xrange(num_labels)])
+    pred_rev = [best_y]
+    for i in reversed(xrange(1, len(score_vecs))):
+        best_y = bp[i][best_y]
+        pred_rev.append(best_y)
+
+    return pred_rev[::-1]
 
 def drop(x, x_count):
     """Drops x with higher probabiliy if x is less frequent."""
@@ -192,13 +228,14 @@ class Mention2Vec(object):
         self.__BIO_DEC = {self.__BIO_ENC[x]: x for x in self.__BIO_ENC}
 
     def config(self, wdim, cdim, ldim, model_path, wemb_path, epochs,
-               dropout_rate, learning_rate):
+               loss, dropout_rate, learning_rate):
         self.wdim = wdim
         self.cdim = cdim
         self.ldim = ldim
         self.model_path = model_path
         self.wemb_path = wemb_path
         self.epochs = epochs
+        self.loss = loss
         self.dropout_rate = dropout_rate
         self.learning_rate = learning_rate
 
@@ -248,14 +285,14 @@ class Mention2Vec(object):
         self.m.save(os.path.join(self.model_path, "model"))
         with open(os.path.join(self.model_path, "info.pickle"), 'w') as outf:
             pickle.dump((self.w_enc, self.wdim, self.c_enc, self.cdim,
-                         self.ldim, self.e_dec), outf)
+                         self.ldim, self.e_dec, self.loss), outf)
 
     def load_and_populate(self, model_path):
         self.m = dy.ParameterCollection()
         self.model_path = model_path
         with open(os.path.join(self.model_path, "info.pickle")) as inf:
             self.w_enc, self.wdim, self.c_enc, self.cdim, self.ldim, \
-                self.e_dec = pickle.load(inf)
+                self.e_dec, self.loss = pickle.load(inf)
         self.wlook = self.m.add_lookup_parameters((len(self.w_enc), self.wdim))
         self.clook = self.m.add_lookup_parameters((len(self.c_enc), self.cdim))
         self.__init_others()
@@ -290,11 +327,20 @@ class Mention2Vec(object):
         W_bio1b = dy.parameter(self.l2bio1b)
         W_bio2 = dy.parameter(self.l2bio2)
         W_bio2b = dy.parameter(self.l2bio2b)
+        def ff(h): return W_bio2 * dy.tanh(W_bio1 * h + W_bio1b) + W_bio2b
+
+        gs = [ff(h) for h in inputs]  # Inputs now 3 dimensional ("BIO scores")
+
+        if self.loss == "global":
+            boundary_loss = self.get_loss_boundary_global(gs, seq)
+        elif self.loss == "local":
+            boundary_loss = self.get_loss_boundary_local(gs, seq)
+        else:
+            sys.exit("Unknown loss \"{0}\"".format(self.loss))
 
         losses = []
         if not self.__is_training: seq.bio_pred = []
-        for i, h in enumerate(inputs):
-            g = W_bio2 * dy.tanh(W_bio1 * h + W_bio1b) + W_bio2b
+        for i, g in enumerate(gs):
             if self.__is_training:
                 gold = self.__BIO_ENC[seq.l_seq[i][0]]
                 losses.append(dy.pickneglogsoftmax(g, gold))
@@ -304,6 +350,55 @@ class Mention2Vec(object):
 
         return boundary_loss
 
+    def get_loss_boundary_global(self, score_vecs, seq):
+        start_b = dy.parameter(self.start_bias)
+        T = dy.parameter(self.trans_mat)
+        end_b = dy.parameter(self.end_bias)
+
+        if not self.__is_training:
+            seq.bio_pred = viterbi(start_b, T, end_b, score_vecs, self.valid)
+            return dy.scalarInput(0.)
+
+        pi = [[None] * 3] * len(score_vecs)
+
+        for y in xrange(3): pi[0][y] = score_vecs[0][y] + start_b[y]
+
+        for i in xrange(1, len(pi)):
+            for y in xrange(3):
+                pi[i][y] = dy.logsumexp([pi[i-1][y_prev] +
+                                         T[y_prev][y] + score_vecs[i][y]
+                                         for y_prev in xrange(3)])
+
+        normalizer = dy.logsumexp([pi[-1][y] + end_b[y] for y in xrange(3)])
+        gold_score = score_crf(start_b, T, end_b, score_vecs,
+                               [self.__BIO_ENC[l[0]] for l in seq.l_seq])
+
+        return normalizer - gold_score
+
+    def get_loss_boundary_local(self, score_vecs, seq):
+        losses = []
+        if not self.__is_training: seq.bio_pred = []
+        for i, scores in enumerate(score_vecs):
+            if self.__is_training:
+                gold = self.__BIO_ENC[seq.l_seq[i][0]]
+                losses.append(dy.pickneglogsoftmax(scores, gold))
+            else:
+                scores_np = scores.npvalue()
+                if i > 0:
+                    y_best = None
+                    score_best = float("-inf")
+                    for y in xrange(3):
+                        if self.__BIO_ENC[seq.bio_pred[i-1]] in self.valid[y] \
+                           and scores_np[y] > score_best:
+                            y_best = y
+                            score_best = scores_np[y]
+                else:
+                    y_best = np.argmax(scores_np)
+
+                seq.bio_pred.append(self.__BIO_DEC[y_best])
+
+        return dy.esum(losses) if losses else dy.scalarInput(0.)
+
     def get_loss_classification(self, inputs, seq):
         """
         Computes classification loss for this sequence based on input vectors.
@@ -312,6 +407,7 @@ class Mention2Vec(object):
         W_ent1b = dy.parameter(self.l2ent1b)
         W_ent2 = dy.parameter(self.l2ent2)
         W_ent2b = dy.parameter(self.l2ent2b)
+        def ff(h): return W_ent2 * dy.tanh(W_ent1 * h + W_ent1b) + W_ent2b
 
         boundaries = get_boundaries(seq.l_seq) if self.__is_training else \
                      get_boundaries(seq.bio_pred)
@@ -319,7 +415,7 @@ class Mention2Vec(object):
         if not self.__is_training: seq.ent_pred = []
         for (s, t, entity) in boundaries:
             h = bilstm_single(inputs[s:t+1], self.elstm1, self.elstm2)
-            g = W_ent2 * dy.tanh(W_ent1 * h + W_ent1b) + W_ent2b
+            g = ff(h)
             if self.__is_training:
                 gold = self.e_enc[entity]
                 losses.append(dy.pickneglogsoftmax(g, gold))
@@ -415,6 +511,22 @@ class Mention2Vec(object):
         self.l2bio1b = self.m.add_parameters((3))
         self.l2bio2 = self.m.add_parameters((3, 3))
         self.l2bio2b = self.m.add_parameters((3))
+        if self.loss == "global":
+            self.start_bias = self.m.add_parameters((3))
+            self.trans_mat = self.m.add_parameters((3, 3))
+            self.end_bias = self.m.add_parameters((3))
+
+        # valid[y] = set of labels that can precede y
+        self.valid = {self.__BIO_ENC['B']: [self.__BIO_ENC['B'],
+                                            self.__BIO_ENC['I'],
+                                            self.__BIO_ENC['O']],
+
+                      self.__BIO_ENC['I']: [self.__BIO_ENC['B'],
+                                            self.__BIO_ENC['I']],
+
+                      self.__BIO_ENC['O']: [self.__BIO_ENC['B'],
+                                            self.__BIO_ENC['I'],
+                                            self.__BIO_ENC['O']]}
 
         # Entity classification params
         self.elstm1 = dy.LSTMBuilder(1, 2 * self.ldim, 2 * self.ldim, self.m)
@@ -431,7 +543,8 @@ def main(args):
 
     if args.train:
         model.config(args.wdim, args.cdim, args.ldim,
-                     args.model, args.emb, args.epochs, args.drop, args.lrate)
+                     args.model, args.emb, args.epochs, args.loss,
+                     args.drop, args.lrate)
         dev = SeqData(args.dev) if args.dev else None
         model.train(data, dev)
 
@@ -454,6 +567,8 @@ if __name__ == "__main__":
     argparser.add_argument("--ldim", type=int, default=100, help="%(default)d")
     argparser.add_argument("--epochs", type=int, default=30,
                            help="%(default)d")
+    argparser.add_argument("--loss", type=str, default="global",
+                           help="%(default)s")
     argparser.add_argument("--drop", type=float, default=0.1,
                            help="%(default)f")
     argparser.add_argument("--lrate", type=float, default=0.001,

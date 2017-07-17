@@ -1,6 +1,8 @@
 import unittest
 from mention2vec import get_boundaries
 from mention2vec import label_bio
+from mention2vec import score_crf
+from mention2vec import viterbi
 
 class TestBoundaryExtraction(unittest.TestCase):
     """Test the correctness of boundary extraction from BIO sequences."""
@@ -92,6 +94,43 @@ class TestBIOLabeling(unittest.TestCase):
         self.assertEqual(label_bio(bio, ents),
                          ['I-PER', 'B-PER', 'I-PER', 'O', 'I-LOC', 'B-PER',
                           'I-PER'])
+
+class TestGlobalInference(unittest.TestCase):
+    """Test the correctness of global sequence inference."""
+
+    def setUp(self):
+        self.s = [1, 2]
+        self.T = [[3, 2], [1, 6]]
+        self.e = [2, 1]
+        self.score_vecs = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+
+    def test_score_crf(self):
+        """Scoring a BIO sequence"""
+        self.assertEqual(score_crf(self.s, self.T, self.e, self.score_vecs,
+                                   [0, 1, 0]), 7.)
+
+    def test_viterbi(self):
+        """Viterbi"""
+        start_b = [1, 2]
+        T = [[3, 2], [1, 6]]
+        end_b = [2, 1]
+        score_vecs = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+
+        path_best = None
+        score_best = float("-inf")
+        for y1 in {0, 1}:
+            for y2 in {0, 1}:
+                for y3 in {0, 1}:
+                    path = [y1, y2, y3]
+                    score = score_crf(self.s, self.T, self.e, self.score_vecs,
+                                      path)
+                    if score > score_best:
+                        path_best = path
+                        score_best = score
+
+        valid = {0:[0, 1], 1: [0, 1]}
+        self.assertEqual(viterbi(self.s, self.T, self.e, self.score_vecs,
+                                 valid), path_best)
 
 if __name__ == '__main__':
     unittest.main()
