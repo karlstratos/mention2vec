@@ -569,9 +569,9 @@ if __name__ == "__main__":
                            help="%(default)d")
     argparser.add_argument("--loss", type=str, default="global",
                            help="%(default)s")
-    argparser.add_argument("--drop", type=float, default=0.1,
+    argparser.add_argument("--drop", type=float, default=0.4,
                            help="%(default)f")
-    argparser.add_argument("--lrate", type=float, default=0.001,
+    argparser.add_argument("--lrate", type=float, default=0.004,
                            help="%(default)f")
     argparser.add_argument("--dynet-mem")
     argparser.add_argument("--dynet-seed")
