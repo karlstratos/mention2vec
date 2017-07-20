@@ -537,7 +537,9 @@ class Mention2Vec(object):
         self.l2ent2b = self.m.add_parameters((len(self.e_dec)))
 
 ############################  command line usage  ##############################
+
 def main(args):
+    random.seed(42)
     data = SeqData(args.data)
     model = Mention2Vec()
 
