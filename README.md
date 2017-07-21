@@ -56,3 +56,8 @@ The lines in /tmp/entemb look like [sentence with entity mark] and [embedding va
 		1.0000		At__Colchester__:__Essex__beat__{{Gloucestershire}}__by__an__innings__and
 		1.0000		When__Arafat__returned__to__the__podium__,__he__said__senior__{{PLO}}__negotiator__Mahmoud__Abbas__,__better__known__as__Abu__Mazen__,__and__Netanyahu__aide__Dore__Gold__could__meet__on__Thursday__.
 		1.0000		2__-__Miladin__Becanovic__-LPR-__Lille__-RPR-__,__Enzo__Scifo__-LPR-__{{Monaco}}__-RPR-__,
+
+
+Reference
+---------
+[Entity Identification as Multitasking](?)
