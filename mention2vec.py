@@ -117,6 +117,22 @@ def bilstm(inputs, lstm1, lstm2):
         outs.append(dy.concatenate([outs_f[i], out_b]))
     return outs
 
+def stringfy(words, start, end):
+    """
+    Converts a sentence with an entity marked by start and end into a single
+    string.
+    """
+    string = ""
+    delim = "__"
+    start_marker = "{{"
+    end_marker = "}}"
+    for i, word in enumerate(words):
+        if i == start: word = start_marker + word
+        if i == end: word = word + end_marker
+        if i < len(words) - 1: word = word + delim
+        string += word
+    return string
+
 ################################# data #########################################
 
 class Seq(object):
@@ -228,6 +244,11 @@ class Mention2Vec(object):
         self.__BIO_ENC = {'B': 0, 'I': 1, 'O': 2}
         self.__BIO_DEC = {self.__BIO_ENC[x]: x for x in self.__BIO_ENC}
         self.crep_cache = {}
+        self.entemb_path = None
+
+    def set_entemb(self, entemb_path):
+        self.entemb_path = entemb_path
+        open(self.entemb_path, 'w').close()  # Clear before appending
 
     def config(self, wdim, cdim, ldim, model_path, wemb_path, epochs,
                loss, dropout_rate, learning_rate):
@@ -433,6 +454,13 @@ class Mention2Vec(object):
                 losses.append(dy.pickneglogsoftmax(g, gold))
             else:
                 seq.ent_pred.append(self.e_dec[np.argmax(g.npvalue())])
+                if self.entemb_path:
+                    string = stringfy(seq.w_seq, s, t)
+                    with open(self.entemb_path, 'a') as inf:
+                        inf.write(string + '\t')
+                        for val in g.vec_value(): inf.write(str(val) + ' ')
+                        inf.write('\n')
+
         classification_loss = dy.esum(losses) if losses else dy.scalarInput(0.)
 
         return classification_loss
@@ -564,6 +592,7 @@ def main(args):
 
     else:
         model.load_and_populate(args.model)
+        if args.entemb: model.set_entemb(args.entemb)
         perf, speed = model.get_perf(data)
         if args.pred: data.write(args.pred)
         print "F1: {0:.2f} ({1} words/sec)".format(perf, speed)
@@ -574,6 +603,8 @@ if __name__ == "__main__":
     argparser.add_argument("data", type=str, help="data for train/test)")
     argparser.add_argument("--dev", type=str, help="data for dev")
     argparser.add_argument("--pred", type=str, help="write predictions here")
+    argparser.add_argument("--entemb", type=str, help="write embeddings for "
+                           "predicted entities here")
     argparser.add_argument("--train", action="store_true", help="train model?")
     argparser.add_argument("--emb", type=str, help="word embeddings")
     argparser.add_argument("--wdim", type=int, default=100, help="%(default)d")
