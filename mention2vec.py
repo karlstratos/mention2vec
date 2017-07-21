@@ -6,6 +6,7 @@ import os
 import pickle
 import random
 import sys
+import time
 from collections import Counter
 from copy import deepcopy
 
@@ -261,7 +262,7 @@ class Mention2Vec(object):
             if dev:
                 self.__is_training = False
                 self.__disable_lstm_dropout()
-                perf = self.get_perf(dev)
+                perf, _ = self.get_perf(dev)
                 print "Epoch {0:d} F1: {1:.2f}".format(epoch + 1, perf),
                 if perf > perf_best:
                     perf_best = perf
@@ -278,7 +279,7 @@ class Mention2Vec(object):
         if exists:
             m = Mention2Vec()
             m.load_and_populate(self.model_path)
-            perf = m.get_perf(dev)
+            perf, _ = m.get_perf(dev)
             print "Best dev F1: {0:.2f}".format(perf)
 
     def save(self):
@@ -299,10 +300,13 @@ class Mention2Vec(object):
         self.m.populate(os.path.join(self.model_path, "model"))
         self.__disable_lstm_dropout()
 
-    def get_perf(self, dev):
-        for i in xrange(len(dev.seqs)):
-            self.get_loss(dev.seqs[i])
-        return dev.evaluate()
+    def get_perf(self, test):
+        start_time = time.time()
+        num_words = 0
+        for i in xrange(len(test.seqs)):
+            self.get_loss(test.seqs[i])
+            num_words += len(test.seqs[i].w_seq)
+        return test.evaluate(), int(num_words / (time.time() - start_time))
 
     def get_crep(self, w):
         """Character-based representation of word w"""
@@ -552,9 +556,9 @@ def main(args):
 
     else:
         model.load_and_populate(args.model)
-        perf = model.get_perf(data)
+        perf, speed = model.get_perf(data)
         if args.pred: data.write(args.pred)
-        print "F1: {0:.2f}".format(perf)
+        print "F1: {0:.2f} ({1} words/sec)".format(perf, speed)
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser()
