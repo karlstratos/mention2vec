@@ -227,6 +227,7 @@ class Mention2Vec(object):
         self.__UNK = "<?>"
         self.__BIO_ENC = {'B': 0, 'I': 1, 'O': 2}
         self.__BIO_DEC = {self.__BIO_ENC[x]: x for x in self.__BIO_ENC}
+        self.crep_cache = {}
 
     def config(self, wdim, cdim, ldim, model_path, wemb_path, epochs,
                loss, dropout_rate, learning_rate):
@@ -301,6 +302,9 @@ class Mention2Vec(object):
         self.__disable_lstm_dropout()
 
     def get_perf(self, test):
+        assert not self.__is_training
+        self.crep_cache.clear()
+        for w in test.w_enc: self.crep_cache[w] = self.get_crep(w).vec_value()
         start_time = time.time()
         num_words = 0
         for i in xrange(len(test.seqs)):
@@ -310,6 +314,10 @@ class Mention2Vec(object):
 
     def get_crep(self, w):
         """Character-based representation of word w"""
+        if not self.__is_training and w in self.crep_cache:
+            crep = dy.vecInput(2 * self.cdim)
+            crep.set(self.crep_cache[w])
+            return crep
         inputs = []
         for c in w:
             if self.__is_training and drop(c, self.c_count): c = self.__UNK
