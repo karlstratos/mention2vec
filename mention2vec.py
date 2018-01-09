@@ -61,8 +61,8 @@ def score_crf(start_b, T, end_b, score_vecs, inds):
 
 def viterbi(start_b, T, end_b, score_vecs, valid):
     num_labels = len(valid)
-    pi = [[None] * num_labels] * len(score_vecs)
-    bp = [[None] * num_labels] * len(score_vecs)
+    bp = [[None for _ in xrange(num_labels)] for _ in xrange(len(score_vecs))]
+    pi = [[None for _ in xrange(num_labels)] for _ in xrange(len(score_vecs))]
 
     for y in xrange(num_labels): pi[0][y] = score_vecs[0][y] + start_b[y]
 
@@ -392,7 +392,7 @@ class Mention2Vec(object):
             seq.bio_pred = viterbi(start_b, T, end_b, score_vecs, self.valid)
             return dy.scalarInput(0.)
 
-        pi = [[None] * 3] * len(score_vecs)
+        pi = [[None for _ in xrange(3)] for _ in xrange(len(score_vecs))]
 
         for y in xrange(3): pi[0][y] = score_vecs[0][y] + start_b[y]
 

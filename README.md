@@ -7,23 +7,23 @@ Highlights
 -----------
 1. Mention2Vec is a good NER model. In particular, it can achieve 90.9 test F1 score on CoNLL 2003. To replicate the result, train the model by typing
 ```
-python mention2vec.py /tmp/m2v ../data/conll2003.train --train --dynet-mem 2048 --dynet-seed 42 --dev ../data/conll2003.dev --emb sskip.100.vectors
+python2.7 mention2vec.py /tmp/m2v ../data/conll2003.train --train --dynet-mem 2048 --dynet-seed 42 --dev ../data/conll2003.dev --emb sskip.100.vectors
 ```
 where `sskip.100.vectors` is the pre-trained word embeddings used in [Lample et al. (2016)](https://arxiv.org/pdf/1603.01360.pdf). Then run the model on the test data by typing
 ```
-python mention2vec.py /tmp/m2v ../data/conll2003.test --pred /tmp/pred
+python2.7 mention2vec.py /tmp/m2v ../data/conll2003.test --pred /tmp/pred
 ```
 The path to prediction file is optional.
 
 2. Mention2Vec can crank out context-sensitive representations of predicted entities. To obtain them, simply add `--entemb` flag when you run the model at test time:
 ```
-python mention2vec.py /tmp/m2v ../data/conll2003.test --pred /tmp/pred --entemb /tmp/entemb
+python2.7 mention2vec.py /tmp/m2v ../data/conll2003.test --pred /tmp/pred --entemb /tmp/entemb
 ```
 The lines in /tmp/entemb look like [sentence with entity mark] and [embedding values]. You can then use the provided script to see nearest neighbors.
 
 ### Some nearest neighbor examples
 
-`python display_nearest_neighbors.py /scratch/m2v/entemb.dev`
+`python2.7 display_nearest_neighbors.py /scratch/m2v/entemb.dev`
 
 `Read 5802 embeddings of dimension 4`
 
